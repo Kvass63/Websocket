@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Чат: WebSocket и SSE</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Чат</h1>
+    <div class="controls">
+      <label>Ник
+        <input id="nick" maxlength="20" autocomplete="off">
+      </label>
+      <label>Комната
+        <input id="room" value="general" maxlength="30" autocomplete="off">
+      </label>
+      <label>Транспорт
+        <select id="transport">
+          <option value="ws">WebSocket</option>
+          <option value="sse">SSE</option>
+        </select>
+      </label>
+      <button id="connect" type="button">Войти</button>
+      <span id="status" class="status closed">отключено</span>
+    </div>
+  </header>
+
+  <main>
+    <section id="feed" class="feed"></section>
+    <aside class="online">
+      <h2>Онлайн: <span id="online-count">0</span></h2>
+      <ul id="online-list"></ul>
+    </aside>
+  </main>
+
+  <form id="send-form" class="send">
+    <input id="text" maxlength="2000" placeholder="Сообщение" autocomplete="off" disabled>
+    <button id="send" type="submit" disabled>Отправить</button>
+  </form>
+
+  <!-- type="module" нужен, чтобы в app.js работали import -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
