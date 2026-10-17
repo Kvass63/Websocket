@@ -1,30 +1,111 @@
 """Транспорт WebSocket (участник A).
 
-ЗАГЛУШКА шага 1: сервер принимает соединение и сразу закрывает его.
+Адрес: WS /ws?room=<room>&nick=<nick>
 
-Что нужно сделать на шаге 2:
-1. Вызвать websocket.accept().
-2. Вызвать hub.join(room, nick). При ValueError закрыть с кодом 4000,
-   при NickTaken — с кодом 4001.
-3. Запустить две одновременные задачи:
-   - чтение: receive_json() -> models.check_text -> hub.publish(...)
-   - запись: subscriber.queue.get() -> send_json(...); если
-     subscriber.kicked, закрыть с кодом 4002.
-4. Когда одна задача завершилась, отменить вторую.
-5. В блоке finally вызвать hub.leave(subscriber).
+Как это работает:
+1. Браузер присылает обычный HTTP-запрос с заголовком Upgrade: websocket,
+   websocket.accept() отвечает кодом 101, и дальше по тому же соединению
+   в обе стороны идут кадры WebSocket.
+2. Клиент входит в комнату через hub.join.
+3. Запускаются две задачи, которые работают одновременно:
+   - receive_loop ждёт сообщения от клиента и рассылает их в комнату;
+   - send_loop ждёт сообщения в очереди подписчика и шлёт их клиенту.
+   Одна задача не справилась бы: пока она ждёт клиента, сообщения
+   из комнаты лежали бы в очереди неотправленными.
+4. Когда любая задача завершилась, вторую отменяем, а клиента убираем
+   из комнаты (hub.leave в блоке finally).
 
-Понадобятся: from app.core import models
-             from app.core.hub import hub, NickTaken
+Коды закрытия от сервера (диапазон 4000–4999 отведён под коды приложений):
+4000 — некорректный ник или комната, 4001 — ник занят,
+4002 — отключён как медленный клиент.
 """
 
-from fastapi import APIRouter, WebSocket
+import asyncio
+import json
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from app.core import models
+from app.core.hub import NickTaken, hub
 
 router = APIRouter()
 
 
 @router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket, room: str = "", nick: str = ""):
-    # Сначала accept, потом close: иначе клиент не увидит код закрытия.
+    # Сначала accept, потом close: если закрыть до accept, клиент получит
+    # HTTP 403 и код 1006 и не узнает, в чём дело.
     await websocket.accept()
-    # 1011 — стандартный код «внутренняя ошибка сервера».
-    await websocket.close(code=1011, reason="WebSocket ещё не реализован")
+
+    # Причина закрытия ограничена 123 байтами, поэтому она короткая.
+    try:
+        subscriber = hub.join(room, nick)
+    except NickTaken:
+        await websocket.close(code=4001, reason="ник занят")
+        return
+    except ValueError:
+        await websocket.close(code=4000, reason="некорректный ник или комната")
+        return
+
+    receiver = asyncio.create_task(receive_loop(websocket, subscriber))
+    sender = asyncio.create_task(send_loop(websocket, subscriber))
+    try:
+        # Ждём, пока завершится хотя бы одна из двух задач.
+        done, pending = await asyncio.wait(
+            [receiver, sender], return_when=asyncio.FIRST_COMPLETED
+        )
+        # Если задача упала с ошибкой (не из-за отключения клиента),
+        # result() выбросит эту ошибку здесь, и uvicorn покажет её в логе.
+        for task in done:
+            task.result()
+    finally:
+        # Отменить уже завершённую задачу можно, это ничего не делает.
+        receiver.cancel()
+        sender.cancel()
+        hub.leave(subscriber)
+
+
+async def receive_loop(websocket, subscriber):
+    """Читать сообщения клиента и рассылать их в комнату."""
+    while True:
+        try:
+            raw = await websocket.receive_text()
+        except WebSocketDisconnect:
+            # Клиент закрыл вкладку или нажал «Выйти».
+            return
+
+        # Пока мы ждали, Hub мог отключить клиента как медленного.
+        # Тогда его сообщение не рассылаем и больше не читаем: соединение
+        # закрывает send_loop, а чтение закрытого сокета — ошибка.
+        if subscriber.kicked:
+            return
+
+        # Ожидаем {"text": "...", "cts": 123.4}; cts необязателен.
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            # Пришёл не JSON. Пропускаем, соединение не рвём.
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
+            text = models.check_text(data.get("text"))
+        except ValueError:
+            continue
+
+        message = models.make_message(subscriber.room, subscriber.nick, text, data.get("cts"))
+        hub.publish(subscriber.room, message)
+
+
+async def send_loop(websocket, subscriber):
+    """Забирать сообщения из очереди подписчика и отправлять клиенту."""
+    try:
+        # Флаг kicked ставит Hub, когда очередь переполнилась.
+        # Тогда в очереди лежат сообщения, и get() не зависнет.
+        while not subscriber.kicked:
+            message = await subscriber.queue.get()
+            await websocket.send_json(message)
+        await websocket.close(code=4002, reason="слишком медленный клиент")
+    except WebSocketDisconnect:
+        # Клиент ушёл, пока мы ему писали.
+        return
