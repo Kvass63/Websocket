@@ -6,12 +6,17 @@
 //   send(text)               отправить сообщение
 //   close()                  закрыть соединение
 //   onMessage(callback)      callback(msg) вызывается на каждое сообщение сервера
-//   onStatus(callback)       callback(status), где status — одна из строк
-//                            'connecting' | 'open' | 'reconnecting' | 'closed'
+//   onStatus(callback)       callback(status, reason), где status — одна из строк
+//                            'connecting' | 'open' | 'reconnecting' | 'closed',
+//                            а reason — необязательная строка для пользователя
 //
-// Договорённость: когда соединение закрыто окончательно (по кнопке «Выйти»
-// или из-за ошибки, после которой переподключаться нельзя), транспорт
-// обязательно сообщает статус 'closed'.
+// Договорённости:
+// - Когда соединение закрыто окончательно (по кнопке «Выйти» или из-за
+//   ошибки, после которой переподключаться нельзя), транспорт обязательно
+//   сообщает статус 'closed'.
+// - reason транспорт передаёт, когда знает причину, с любым статусом.
+//   Например: ('closed', 'ник занят') или ('reconnecting', 'отключён как
+//   медленный клиент'). Интерфейс показывает её строкой в ленте.
 
 import { WsTransport } from "./transport-ws.js";
 import { SseTransport } from "./transport-sse.js";
@@ -131,9 +136,14 @@ function handleMessage(msg) {
   }
 }
 
-function handleStatus(status) {
+function handleStatus(status, reason) {
   statusLabel.textContent = STATUS_TEXT[status];
   statusLabel.className = "status " + status;
+
+  // Причина приходит не всегда: при обычном входе и выходе её нет.
+  if (reason) {
+    addSystemLine(reason);
+  }
 
   // Писать можно только при открытом соединении.
   const isOpen = status === "open";
