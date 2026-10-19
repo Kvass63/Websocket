@@ -37,14 +37,16 @@ async def ws_endpoint(websocket: WebSocket, room: str = "", nick: str = ""):
     # HTTP 403 и код 1006 и не узнает, в чём дело.
     await websocket.accept()
 
-    # Причина закрытия ограничена 123 байтами, поэтому она короткая.
+    # Причина закрытия ограничена 123 байтами, а русская буква в UTF-8
+    # занимает 2 байта, поэтому причина короткая. Тексты такие же,
+    # как у SSE, чтобы интерфейс показывал одинаковые сообщения.
     try:
         subscriber = hub.join(room, nick)
     except NickTaken:
-        await websocket.close(code=4001, reason="ник занят")
+        await websocket.close(code=4001, reason="ник уже занят в этой комнате")
         return
     except ValueError:
-        await websocket.close(code=4000, reason="некорректный ник или комната")
+        await websocket.close(code=4000, reason="некорректный ник или название комнаты")
         return
 
     receiver = asyncio.create_task(receive_loop(websocket, subscriber))
@@ -105,7 +107,7 @@ async def send_loop(websocket, subscriber):
         while not subscriber.kicked:
             message = await subscriber.queue.get()
             await websocket.send_json(message)
-        await websocket.close(code=4002, reason="слишком медленный клиент")
+        await websocket.close(code=4002, reason="отключён как медленный клиент")
     except WebSocketDisconnect:
         # Клиент ушёл, пока мы ему писали.
         return

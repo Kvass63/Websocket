@@ -74,15 +74,20 @@ export class WsTransport {
     // обрыва сети. Код и причину пишем в консоль браузера (F12):
     // 4000, 4001 — см. NO_RETRY_CODES, 4002 — медленный клиент,
     // 1000 — обычное закрытие, 1006 — обрыв, 1012 — сервер перезапускается.
+    //
+    // event.reason — текст, который сервер передал в close(code, reason).
+    // Отдаём его интерфейсу вторым аргументом, он покажет его в ленте.
+    // Если сервер причину не указал, это пустая строка, и интерфейс
+    // ничего не покажет.
     this.socket.onclose = (event) => {
       console.log(`WebSocket закрыт: код ${event.code}, причина "${event.reason}"`);
 
       if (this.closedByUser || NO_RETRY_CODES.includes(event.code)) {
-        this.statusCallback("closed");
+        this.statusCallback("closed", event.reason);
         return;
       }
 
-      this.statusCallback("reconnecting");
+      this.statusCallback("reconnecting", event.reason);
       console.log(`Переподключение через ${this.delay} мс`);
       this.timer = setTimeout(() => {
         this.timer = null;
