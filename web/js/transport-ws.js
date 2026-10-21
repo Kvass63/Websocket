@@ -110,9 +110,10 @@ export class WsTransport {
       this.timer = null;
       this.statusCallback("closed");
     } else {
-      // Обычное закрытие (код 1000). После него сработает onclose
-      // и сообщит интерфейсу статус 'closed'.
-      this.socket.close();
+      // Обычное закрытие. Код 1000 указываем явно: без него закрытие
+      // уходит без кода, и onclose видит 1005. После закрытия сработает
+      // onclose и сообщит интерфейсу статус 'closed'.
+      this.socket.close(1000);
     }
   }
 }
