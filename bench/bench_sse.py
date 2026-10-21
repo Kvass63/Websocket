@@ -114,8 +114,12 @@ async def main():
     # поэтому лимит снимаем. timeout=None: стрим может долго молчать
     # (": ping" раз в 15 с), и это не ошибка.
     # posts — один клиент с keep-alive для всех POST, как в браузере.
+    # Тайм-аут 30 с вместо стандартных 5: POST, не дождавшийся ответа,
+    # сервер мог всё равно обработать, и сообщение дошло бы до всех, но
+    # считалось бы ошибкой отправки. В send_errors должны попадать только
+    # настоящие отказы.
     async with httpx.AsyncClient(limits=httpx.Limits(max_connections=None), timeout=None) as streams, \
-               httpx.AsyncClient() as posts:
+               httpx.AsyncClient(timeout=30) as posts:
         await common.run_all("sse", lambda: SseClient(streams, posts), args.n, args.runs)
 
 
