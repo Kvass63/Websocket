@@ -48,6 +48,14 @@ export class SseTransport {
       this.messageCallback(JSON.parse(event.data));
     };
 
+    // Событие "event: kicked" не попадает в onmessage: события со своим
+    // именем ловятся только через addEventListener. Сервер шлёт его, когда
+    // выкинул нас как медленного клиента, и сразу закрывает стрим. После
+    // этого EventSource переподключится сам, и мы войдём в комнату заново.
+    this.source.addEventListener("kicked", () => {
+      this.statusCallback("reconnecting", "отключён как медленный клиент");
+    });
+
     this.source.onerror = () => {
       if (this.source.readyState === EventSource.CONNECTING) {
         // Сеть оборвалась или сервер недоступен: браузер сам
@@ -84,13 +92,19 @@ export class SseTransport {
   }
 
   async send(text) {
-    const response = await fetch("/sse/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ room: this.room, nick: this.nick, text }),
-    });
-    if (!response.ok) {
-      console.warn("POST /sse/send: ответ", response.status);
+    try {
+      const response = await fetch("/sse/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: this.room, nick: this.nick, text }),
+      });
+      if (!response.ok) {
+        console.warn("POST /sse/send: ответ", response.status);
+      }
+    } catch (error) {
+      // Если сервер недоступен, fetch не возвращает ответ, а бросает
+      // исключение. Без catch в консоли было бы «Uncaught (in promise)».
+      console.warn("POST /sse/send: сервер не ответил", error);
     }
   }
 

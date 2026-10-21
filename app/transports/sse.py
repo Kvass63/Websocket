@@ -47,10 +47,19 @@ class SendBody(BaseModel):
     cts: float | None = None
 
 
+# Последнее событие для медленного клиента перед закрытием стрима.
+# У SSE нет кодов закрытия, как 4002 у WebSocket, поэтому причину
+# сообщаем событием со своим именем. Строка data обязательна:
+# событие без data браузер не передаёт в JavaScript.
+KICKED_EVENT = "event: kicked\ndata: {}\n\n"
+
+
 def format_event(message):
     """Превратить словарь-сообщение в текст одного события SSE."""
-    # ensure_ascii=False: русские буквы идут как есть, а не как р.
-    data = json.dumps(message, ensure_ascii=False)
+    # ensure_ascii=False: русские буквы идут как есть, а не как \u0440.
+    # separators без пробелов: так же кодирует send_json у WebSocket,
+    # иначе размер сообщений у двух транспортов будет нечестно разным.
+    data = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
     if message["type"] == "message":
         # По полю id браузер при переподключении пришлёт Last-Event-ID.
         return f"id: {message['id']}\ndata: {data}\n\n"
@@ -75,11 +84,16 @@ async def event_stream(request, subscriber):
                 yield ": ping\n\n"
                 continue
             yield format_event(message)
+
+        if subscriber.kicked:
+            # Hub выкинул клиента как медленного. Оставшиеся в очереди
+            # сообщения не отправляем, только причину, и завершаем стрим.
+            log.info("SSE: закрываем стрим медленного клиента %s", subscriber.nick)
+            yield KICKED_EVENT
     finally:
         # Сюда попадаем при любом выходе: клиент ушёл (генератор отменили),
         # клиента выкинули как медленного, сервер останавливается.
-        if subscriber.kicked:
-            log.info("SSE: закрываем стрим медленного клиента %s", subscriber.nick)
+        # Для выкинутого клиента leave ничего не делает: Hub его уже убрал.
         hub.leave(subscriber)
 
 
