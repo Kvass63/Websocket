@@ -3,9 +3,9 @@
 Здесь только клиент. Сценарий, замеры и запись результатов — в common.py,
 одни и те же для обоих транспортов.
 
-Запуск (сервер уже запущен без --reload):
-    python bench/bench_ws.py               N = 10, 100, 500, по 3 прогона
-    python bench/bench_ws.py --n 10 --runs 1
+Запуск (сервер перезапущен перед каждым N, без --reload):
+    python bench/bench_ws.py --n 100               3 прогона, со сжатием
+    python bench/bench_ws.py --n 100 --no-deflate  то же без сжатия
 """
 
 import asyncio
@@ -20,13 +20,18 @@ import common
 class WsClient:
     """Один клиент чата по WebSocket."""
 
-    def __init__(self):
+    def __init__(self, deflate=True):
+        # Сжатие кадров (permessage-deflate) браузер включает сам, поэтому
+        # основной замер со сжатием. Без него — чтобы увидеть его цену.
+        self.compression = "deflate" if deflate else None
         self.ws = None
         self.send_errors = 0
 
     async def connect(self, room, nick):
         query = urlencode({"room": room, "nick": nick})
-        self.ws = await websockets.connect(f"{common.WS_URL}/ws?{query}")
+        self.ws = await websockets.connect(
+            f"{common.WS_URL}/ws?{query}", compression=self.compression
+        )
 
     async def send(self, text):
         # cts ставим прямо перед отправкой, а не по расписанию.
@@ -54,8 +59,14 @@ class WsClient:
 
 
 async def main():
-    ns, runs = common.parse_args()
-    await common.run_all("ws", WsClient, ns, runs)
+    parser = common.make_parser()
+    parser.add_argument("--no-deflate", action="store_true",
+                        help="отключить сжатие кадров WebSocket")
+    args = parser.parse_args()
+
+    deflate = not args.no_deflate
+    transport = "ws" if deflate else "ws-nodeflate"
+    await common.run_all(transport, lambda: WsClient(deflate), args.n, args.runs)
 
 
 if __name__ == "__main__":

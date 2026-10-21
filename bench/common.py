@@ -22,15 +22,18 @@
 4. Ждём недошедшие сообщения не дольше WAIT_TIMEOUT_S секунд.
 5. Считаем задержку, потери, CPU и память сервера, пишем CSV.
 
-Запуск: сервер без --reload, например
+Запуск: одно N за раз, и перед каждым N сервер перезапускается. Python
+не возвращает память системе, поэтому после прогона с N = 500 следующий
+прогон с меньшим N показал бы завышенную память. Сервер без --reload:
     uvicorn app.main:app --no-access-log
-и затем python bench/bench_ws.py (или bench_sse.py).
+    python bench/bench_ws.py --n 100       (или bench_sse.py)
 """
 
 import argparse
 import asyncio
 import csv
 import math
+import random
 import time
 from pathlib import Path
 
@@ -48,20 +51,51 @@ ROOM = "bench"
 M = 200                # сколько сообщений отправляет отправитель
 INTERVAL_MS = 20       # интервал между отправками
 WAIT_TIMEOUT_S = 5     # сколько ждать недошедшие после последней отправки
-TEXT = "x" * 100       # текст сообщения: 100 символов, только латиница
+TEXT_LEN = 100         # длина текста сообщения, только латиница
 CONNECT_BATCH = 50     # сколько клиентов подключаем одновременно
 SAMPLE_INTERVAL_S = 0.5  # как часто замерять CPU и память сервера
 READY_TIMEOUT_S = 60   # сколько ждать, пока сервер примет всех клиентов
 
-DEFAULT_NS = [10, 100, 500]
 DEFAULT_RUNS = 3
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
 CSV_FIELDS = [
     "transport", "n", "m", "run", "avg_ms", "p95_ms", "lost", "send_errors",
-    "kicked", "cpu_avg", "cpu_max", "rss_max_mb",
+    "kicked", "cpu_avg", "cpu_max", "rss_start_mb", "rss_max_mb",
 ]
+
+# Слова для текстов сообщений.
+WORDS = (
+    "the a to and of in is it for on with at this that we you they can will "
+    "meeting room slides today tomorrow please bring printed report team "
+    "project server client message latency window update check build test "
+    "review deploy coffee lunch friday morning evening question answer idea "
+    "plan task bug fix release hello thanks sorry later soon maybe sure great "
+    "work home office call email chat link file page code data result"
+).split()
+
+
+def make_texts():
+    """M разных текстов по TEXT_LEN символов из случайных слов.
+
+    Тексты разные, потому что WebSocket сжимает кадры (permessage-deflate)
+    и помнит прошлые сообщения: одинаковый текст со второго раза сжимается
+    почти в ноль, и WS получил бы нереально хорошие условия. Зерно
+    случайности фиксированное, поэтому тексты одинаковые при каждом
+    запуске и у обоих транспортов.
+    """
+    rng = random.Random(42)
+    texts = []
+    for _ in range(M):
+        text = ""
+        while len(text) < TEXT_LEN:
+            text += rng.choice(WORDS) + " "
+        texts.append(text[:TEXT_LEN])
+    return texts
+
+
+TEXTS = make_texts()
 
 
 def now_ms():
@@ -211,6 +245,8 @@ async def run_scenario(transport, make_client, n, run):
             f"{n} подключений и пустые очереди",
         )
         process = psutil.Process(stats["pid"])
+        # Память перед окном: от неё видно, сколько добавила сама рассылка.
+        rss_start = process.memory_info().rss / 1024 / 1024
 
         # 3. Окно замера. Первый cpu_percent всегда 0.0, его отбрасываем:
         # он только запоминает отправную точку.
@@ -226,7 +262,7 @@ async def run_scenario(transport, make_client, n, run):
             delay = window_start + i * INTERVAL_MS / 1000 - time.perf_counter()
             if delay > 0:
                 await asyncio.sleep(delay)
-            await sender.send(TEXT)
+            await sender.send(TEXTS[i])
 
         # 4. Ждём все доставки, но не дольше тайм-аута.
         try:
@@ -248,7 +284,13 @@ async def run_scenario(transport, make_client, n, run):
         await asyncio.gather(*(client.close() for client in clients))
         for reader in readers:
             reader.cancel()
-        await asyncio.gather(*readers, return_exceptions=True)
+        # Ошибки задач чтения печатаем: иначе упавший клиент выглядел бы
+        # просто как потери. Отмена (CancelledError) — не ошибка, это
+        # мы сами остановили задачу строкой выше.
+        results = await asyncio.gather(*readers, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                print(f"ошибка при чтении сообщений: {result!r}")
 
     avg, p95 = latency_stats(delivery.latencies)
     cpu_avg, cpu_max, rss_max = server_usage(samples, window_end)
@@ -264,26 +306,25 @@ async def run_scenario(transport, make_client, n, run):
         "kicked": kicked,
         "cpu_avg": rounded(cpu_avg, 1),
         "cpu_max": rounded(cpu_max, 1),
+        "rss_start_mb": rounded(rss_start, 1),
         "rss_max_mb": rounded(rss_max, 1),
     }
     save_csv(row)
     return row
 
 
-def parse_args():
-    """Параметры командной строки: какие N и сколько прогонов."""
+def make_parser():
+    """Параметры командной строки. bench_*.py может добавить свои."""
     parser = argparse.ArgumentParser(description="Нагрузочный тест чата")
-    parser.add_argument("--n", type=int, nargs="+", default=DEFAULT_NS,
-                        help="число клиентов, можно несколько: --n 10 100")
+    parser.add_argument("--n", type=int, required=True,
+                        help="число клиентов; перед каждым N перезапустите сервер")
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS,
-                        help="сколько прогонов на каждое N")
-    args = parser.parse_args()
-    return args.n, args.runs
+                        help="сколько прогонов подряд")
+    return parser
 
 
-async def run_all(transport, make_client, ns, runs):
-    """Все прогоны подряд: для каждого N — runs раз."""
-    for n in ns:
-        for run in range(1, runs + 1):
-            row = await run_scenario(transport, make_client, n, run)
-            print(row)
+async def run_all(transport, make_client, n, runs):
+    """runs прогонов подряд с одним и тем же N."""
+    for run in range(1, runs + 1):
+        row = await run_scenario(transport, make_client, n, run)
+        print(row)
