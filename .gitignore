@@ -3,6 +3,8 @@
 
 # Все файлы Markdown (описание проекта, README, заметки) в git не храним
 *.md
+# Кроме таблицы сравнения: её цифры проверяются по bench/results/
+!docs/comparison.md
 
 # Настройки PyCharm (у каждого свои)
 .idea/
