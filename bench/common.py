@@ -40,7 +40,8 @@ stdout дочернего процесса занят этим обменом, �
 4. Главный говорит всем «sent». Каждый процесс ждёт свою долю сообщений
    не дольше WAIT_TIMEOUT_S секунд и отвечает «done».
 5. Считаем выкинутых, закрываем клиентов, собираем задержки со всех
-   процессов, считаем потери, CPU и память, пишем CSV.
+   процессов, считаем потери, пропускную способность, CPU и память,
+   пишем CSV.
 
 Запуск: одно N за раз, и перед каждым N сервер перезапускается. Python
 не возвращает память системе, поэтому после прогона с N = 500 следующий
@@ -73,7 +74,12 @@ WS_URL = "ws://127.0.0.1:8000"
 ROOM = "bench"
 M = 200                # сколько сообщений отправляет отправитель
 INTERVAL_MS = 20       # интервал между отправками
-WAIT_TIMEOUT_S = 5     # сколько ждать недошедшие после последней отправки
+# Сколько ждать недошедшие после последней отправки. С запасом: при
+# N = 500 сервер не успевает, очередь растёт, и последние сообщения в
+# пробном прогоне SSE шли до 4,7 с. С тайм-аутом 5 с опоздавшие считались
+# бы потерянными. На задержку тайм-аут не влияет: окно замера кончается
+# на последней доставке, а когда пришло всё, ждать перестаём сразу.
+WAIT_TIMEOUT_S = 30
 TEXT_LEN = 100         # длина текста сообщения, только латиница
 CONNECT_BATCH = 50     # сколько клиентов подключаем одновременно
 SAMPLE_INTERVAL_S = 0.5  # как часто замерять CPU и память
@@ -85,7 +91,8 @@ DEFAULT_RUNS = 3
 RESULTS_DIR = Path(__file__).parent / "results"
 
 CSV_FIELDS = [
-    "transport", "n", "m", "run", "avg_ms", "p95_ms", "lost", "send_errors",
+    "transport", "n", "m", "run", "avg_ms", "p95_ms", "deliveries_per_s",
+    "lost", "send_errors",
     "kicked", "cpu_avg", "cpu_max", "rss_start_mb", "rss_max_mb",
     "client_cpu_avg", "client_cpu_max",
 ]
@@ -498,6 +505,14 @@ async def run_scenario(transport, make_client, n, run):
     received_times = [t for t in last_times if t is not None]
     window_end = max(received_times) if received_times else window_start
 
+    # Пропускная способность: сколько доставок в секунду сервер реально
+    # выдал за окно. Пока сервер успевает, это просто заданный темп
+    # N × 1000 / INTERVAL_MS (при N = 100 — 5000 в секунду). Когда не
+    # успевает, очередь растёт, окно растягивается, и число получается
+    # меньше заданного — это и есть предел сервера.
+    window_s = window_end - window_start
+    deliveries_per_s = len(latencies) / window_s if window_s > 0 else None
+
     avg, p95 = latency_stats(latencies)
     cpu_avg, cpu_max, rss_max, client_cpu_avg, client_cpu_max = usage_in_window(samples, window_end)
     row = {
@@ -507,6 +522,7 @@ async def run_scenario(transport, make_client, n, run):
         "run": run,
         "avg_ms": rounded(avg, 3),
         "p95_ms": rounded(p95, 3),
+        "deliveries_per_s": rounded(deliveries_per_s, 0),
         "lost": n * M - len(latencies),
         "send_errors": send_errors,
         "kicked": kicked,
