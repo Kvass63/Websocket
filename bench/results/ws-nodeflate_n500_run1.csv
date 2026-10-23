@@ -1,0 +1,2 @@
+transport,n,m,run,avg_ms,p95_ms,deliveries_per_s,lost,send_errors,kicked,cpu_avg,cpu_max,rss_start_mb,rss_max_mb,client_cpu_avg,client_cpu_max
+ws-nodeflate,500,200,1,4.357,7.437,25013.0,0,0,0,40.0,74.1,360.2,360.3,19.3,27.6
