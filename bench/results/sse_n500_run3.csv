@@ -1,0 +1,2 @@
+transport,n,m,run,avg_ms,p95_ms,deliveries_per_s,lost,send_errors,kicked,cpu_avg,cpu_max,rss_start_mb,rss_max_mb,client_cpu_avg,client_cpu_max
+sse,500,200,3,7.782,12.674,25006.0,0,0,0,60.4,72.7,127.5,127.6,39.0,52.3
