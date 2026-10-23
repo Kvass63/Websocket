@@ -8,7 +8,7 @@
 - Машина: настольный ПК, Intel Core i5-14600KF (14 ядер, 20 потоков),
   31,8 ГБ памяти, Windows 10 Pro. Все замеры в таблице сделаны на ней
   23.10.2026, сервер и клиенты бенчмарка на одной машине
-- Версия Python: 3.14; библиотеки по `requirements.txt`: fastapi 0.143.0,
+- Версия Python: 3.14.3; библиотеки по `requirements.txt`: fastapi 0.143.0,
   uvicorn 0.54.0, websockets 17.2, httpx 0.28.1, psutil 7.2.2
 - Команда запуска сервера: `uvicorn app.main:app --no-access-log`, один
   процесс, без `--reload`
