@@ -1,55 +1,3 @@
-"""Общая часть бенчмарка: параметры, замеры и сам сценарий.
-
-Сценарий одинаковый для WebSocket и SSE, поэтому он описан здесь один раз.
-Файлы bench_ws.py и bench_sse.py содержат только класс клиента — то, чем
-транспорты отличаются. Это тот же подход, что с Hub на сервере.
-
-Клиент, которого принимает run_scenario, должен уметь:
-    await client.connect(room, nick)   войти в комнату
-    await client.send(text)            отправить сообщение, cts ставит сам
-    async for msg in client.messages() получать сообщения (словари);
-                                       цикл заканчивается, когда сервер
-                                       закрыл соединение
-    await client.close()               закрыть; у SSE ещё и дождаться
-                                       недоотправленных POST
-    client.send_errors                 сколько отправок не удалось
-
-Клиенты работают в нескольких процессах. Один процесс Python с 500
-клиентами сам загружает ядро процессора, и часть задержки принадлежала бы
-тестовому скрипту, а не серверу. Поэтому главный процесс держит только
-отправителя u0, а остальные N - 1 клиентов (получатели) делятся между
-WORKERS дочерними процессами. Дочерний процесс — тот же bench_*.py с теми
-же аргументами и флагом --worker. Главный пишет ему команды в stdin и
-читает ответы из его stdout, по одной строке JSON:
-
-    главный -> дочерний         дочерний -> главный
-    {"cmd": "connect", ...}     {"pid": ...}         все его клиенты вошли
-    {"cmd": "sent"}             {"done": true}       получили всё или
-                                                     прошло WAIT_TIMEOUT_S
-    {"cmd": "close"}            {"latencies": ...}   итоги, процесс выходит
-
-stdout дочернего процесса занят этим обменом, поэтому вся диагностика
-печатается в stderr.
-
-Сценарий одного прогона:
-1. Запускаем дочерние процессы. Сначала входит u0, потом по очереди
-   клиенты каждого процесса, внутри процесса пачками по CONNECT_BATCH.
-2. Ждём, пока /api/stats покажет N подключений и пустые очереди.
-3. u0 отправляет M сообщений с интервалом INTERVAL_MS, получают все N,
-   включая отправителя. Ожидается N × M доставок.
-4. Главный говорит всем «sent». Каждый процесс ждёт свою долю сообщений
-   не дольше WAIT_TIMEOUT_S секунд и отвечает «done».
-5. Считаем выкинутых, закрываем клиентов, собираем задержки со всех
-   процессов, считаем потери, пропускную способность, CPU и память,
-   пишем CSV.
-
-Запуск: одно N за раз, и перед каждым N сервер перезапускается. Python
-не возвращает память системе, поэтому после прогона с N = 500 следующий
-прогон с меньшим N показал бы завышенную память. Сервер без --reload:
-    uvicorn app.main:app --no-access-log
-    python bench/bench_ws.py --n 100       (или bench_sse.py)
-"""
-
 import argparse
 import asyncio
 import csv
@@ -100,14 +48,6 @@ WORDS = (
 
 
 def make_texts():
-    """M разных текстов по TEXT_LEN символов из случайных слов.
-
-    Тексты разные, потому что WebSocket сжимает кадры (permessage-deflate)
-    и помнит прошлые сообщения: одинаковый текст со второго раза сжимается
-    почти в ноль, и WS получил бы нереально хорошие условия. Зерно
-    случайности фиксированное, поэтому тексты одинаковые при каждом
-    запуске и у обоих транспортов.
-    """
     rng = random.Random(42)
     texts = []
     for _ in range(M):
@@ -122,25 +62,10 @@ TEXTS = make_texts()
 
 
 def now_ms():
-    """Время в миллисекундах для cts и подсчёта задержки.
-
-    perf_counter, а не time.time: на одной машине задержка около 1 мс,
-    нужны дробные миллисекунды. cts ставит главный процесс, а задержку
-    считают дочерние, поэтому значения perf_counter сравниваются между
-    процессами. Так можно, потому что perf_counter читает один общий
-    счётчик системы (на Windows QueryPerformanceCounter, на Linux
-    CLOCK_MONOTONIC). Документация Python этого не обещает, поэтому
-    проверили замером (см. docs/comparison.md).
-    """
     return time.perf_counter() * 1000
 
 
 def latency_stats(latencies):
-    """Среднее и p95 по всем задержкам вместе, в миллисекундах.
-
-    p95 — значение, меньше или равно которому 95 % задержек: сортируем
-    список и берём элемент с номером ceil(0,95 × длина).
-    """
     if not latencies:
         return None, None
     ordered = sorted(latencies)
@@ -150,14 +75,12 @@ def latency_stats(latencies):
 
 
 async def get_stats(http):
-    """Ответ /api/stats сервера в виде словаря."""
     response = await http.get(f"{HTTP_URL}/api/stats")
     response.raise_for_status()
     return response.json()
 
 
 async def wait_stats(http, condition, what):
-    """Опрашивать /api/stats, пока condition(stats) не станет True."""
     deadline = time.perf_counter() + READY_TIMEOUT_S
     while True:
         stats = await get_stats(http)
@@ -169,8 +92,6 @@ async def wait_stats(http, condition, what):
 
 
 class Delivery:
-    """Что получили клиенты процесса: задержки и время последней доставки."""
-
     def __init__(self, expected):
         self.expected = expected
         self.latencies = []
@@ -187,7 +108,6 @@ class Delivery:
 
 
 async def wait_delivery(delivery):
-    """Ждать всё ожидаемое, но не дольше WAIT_TIMEOUT_S."""
     try:
         await asyncio.wait_for(delivery.all_received.wait(), WAIT_TIMEOUT_S)
     except asyncio.TimeoutError:
@@ -195,18 +115,11 @@ async def wait_delivery(delivery):
 
 
 async def read_messages(client, delivery):
-    """Задача одного клиента: читать всё, что присылает сервер."""
     async for message in client.messages():
         delivery.add(message)
 
 
 async def connect_clients(make_client, first, count, delivery):
-    """Создать count клиентов с никами u<first>, u<first+1>, ... и войти.
-
-    Задача чтения запускается сразу после connect: если не читать, пока
-    входят остальные, в очереди клиента накопятся сотни join и Hub его
-    выкинет до замера. Возвращает клиентов и их задачи чтения.
-    """
     clients = [make_client() for _ in range(count)]
     readers = []
 
@@ -223,11 +136,6 @@ async def connect_clients(make_client, first, count, delivery):
 
 
 async def close_clients(clients, readers):
-    """Закрыть клиентов и остановить чтение. Возвращает ошибки чтения.
-
-    close() ждём: SSE-клиент в нём дожидается своих POST, и только после
-    этого send_errors окончательный.
-    """
     await asyncio.gather(*(client.close() for client in clients))
     for reader in readers:
         reader.cancel()
@@ -236,14 +144,6 @@ async def close_clients(clients, readers):
 
 
 async def sample_usage(server, client_processes, samples):
-    """Раз в SAMPLE_INTERVAL_S записывать замер в samples:
-    (время, CPU сервера %, память сервера МБ, CPU клиентов %).
-
-    cpu_percent(None) считает загрузку с прошлого вызова, поэтому каждое
-    значение описывает промежуток длиной SAMPLE_INTERVAL_S до замера.
-    CPU клиентов — самого загруженного из их процессов: если хотя бы один
-    упирается в ядро (100 %), задержки уже искажены тестом.
-    """
     while True:
         await asyncio.sleep(SAMPLE_INTERVAL_S)
         cpu = server.cpu_percent(None)
@@ -253,12 +153,6 @@ async def sample_usage(server, client_processes, samples):
 
 
 def usage_in_window(samples, window_end):
-    """Среднее и максимум CPU сервера, наибольшая память сервера, среднее
-    и максимум CPU клиентов за окно замера.
-
-    Берём замеры, чей промежуток начался до конца окна: замер в момент t
-    описывает время от t - SAMPLE_INTERVAL_S до t.
-    """
     inside = [s for s in samples if s[0] - SAMPLE_INTERVAL_S < window_end]
     if not inside:
         return None, None, None, None, None
@@ -272,7 +166,6 @@ def usage_in_window(samples, window_end):
 
 
 def save_csv(row):
-    """Записать результат прогона в bench/results/<transport>_n<N>_run<K>.csv."""
     RESULTS_DIR.mkdir(exist_ok=True)
     path = RESULTS_DIR / f"{row['transport']}_n{row['n']}_run{row['run']}.csv"
     with open(path, "w", newline="", encoding="utf-8") as file:
@@ -287,19 +180,11 @@ def rounded(value, digits):
 
 
 def send_to_parent(data):
-    """Отправить главному процессу строку JSON через stdout."""
     sys.stdout.write(json.dumps(data) + "\n")
     sys.stdout.flush()
 
 
 async def read_from_parent(expected_cmd):
-    """Дождаться команды главного процесса из stdin.
-
-    sys.stdin.readline — обычный блокирующий вызов: прямо в цикле событий
-    он остановил бы всё, и клиенты перестали бы читать сообщения.
-    asyncio.to_thread выполняет его в отдельном потоке, а цикл событий
-    тем временем работает дальше.
-    """
     line = await asyncio.to_thread(sys.stdin.readline)
     if not line:
         raise RuntimeError("главный процесс закрыл stdin")
@@ -310,7 +195,6 @@ async def read_from_parent(expected_cmd):
 
 
 async def run_worker(make_client):
-    """Дочерний процесс: держит свою часть получателей и отвечает главному."""
     command = await read_from_parent("connect")
     count = command["count"]
     delivery = Delivery(expected=count * M)
@@ -335,8 +219,6 @@ STDOUT_LIMIT = 16 * 1024 * 1024
 
 
 class Worker:
-    """Дочерний процесс с получателями, как его видит главный процесс."""
-
     def __init__(self, first, count):
         self.first = first
         self.count = count
@@ -364,17 +246,11 @@ class Worker:
         return json.loads(line)
 
     def stop(self):
-        """Убить процесс, если он ещё работает (прогон прервался ошибкой)."""
         if self.proc is not None and self.proc.returncode is None:
             self.proc.kill()
 
 
 def split_receivers(n):
-    """Поделить получателей u1..u(n-1) между WORKERS процессами поровну.
-
-    Возвращает пары (номер первого ника, сколько клиентов). Процессов без
-    клиентов не бывает: при n - 1 < WORKERS их просто меньше.
-    """
     base, extra = divmod(n - 1, WORKERS)
     parts = []
     first = 1
@@ -387,7 +263,6 @@ def split_receivers(n):
 
 
 async def run_scenario(transport, make_client, n, run):
-    """Один прогон: n клиентов, M сообщений. Возвращает строку для CSV."""
     workers = [Worker(first, count) for first, count in split_receivers(n)]
     try:
         async with httpx.AsyncClient() as http:
@@ -485,7 +360,6 @@ async def run_scenario(transport, make_client, n, run):
 
 
 def make_parser():
-    """Параметры командной строки. bench_*.py может добавить свои."""
     parser = argparse.ArgumentParser(description="Нагрузочный тест чата")
     parser.add_argument("--n", type=int, required=True,
                         help="число клиентов; перед каждым N перезапустите сервер")
@@ -496,13 +370,6 @@ def make_parser():
 
 
 async def run_all(transport, make_client, n, runs):
-    """runs прогонов подряд с одним и тем же N.
-
-    С флагом --worker скрипт — дочерний процесс одного прогона: сценарий
-    он не ведёт, а держит своих клиентов и выполняет команды главного.
-    Флаг смотрим прямо в sys.argv, чтобы не менять bench_ws.py и
-    bench_sse.py: они передают сюда только n и runs.
-    """
     if "--worker" in sys.argv[1:]:
         await run_worker(make_client)
         return

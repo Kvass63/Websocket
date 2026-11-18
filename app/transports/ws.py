@@ -1,25 +1,3 @@
-"""Транспорт WebSocket (участник A).
-
-Адрес: WS /ws?room=<room>&nick=<nick>
-
-Как это работает:
-1. Браузер присылает обычный HTTP-запрос с заголовком Upgrade: websocket,
-   websocket.accept() отвечает кодом 101, и дальше по тому же соединению
-   в обе стороны идут кадры WebSocket.
-2. Клиент входит в комнату через hub.join.
-3. Запускаются две задачи, которые работают одновременно:
-   - receive_loop ждёт сообщения от клиента и рассылает их в комнату;
-   - send_loop ждёт сообщения в очереди подписчика и шлёт их клиенту.
-   Одна задача не справилась бы: пока она ждёт клиента, сообщения
-   из комнаты лежали бы в очереди неотправленными.
-4. Когда любая задача завершилась, вторую отменяем, а клиента убираем
-   из комнаты (hub.leave в блоке finally).
-
-Коды закрытия от сервера (диапазон 4000–4999 отведён под коды приложений):
-4000 — некорректный ник или комната, 4001 — ник занят,
-4002 — отключён как медленный клиент.
-"""
-
 import asyncio
 import json
 
@@ -59,7 +37,6 @@ async def ws_endpoint(websocket: WebSocket, room: str = "", nick: str = ""):
 
 
 async def receive_loop(websocket, subscriber):
-    """Читать сообщения клиента и рассылать их в комнату."""
     while True:
         try:
             raw = await websocket.receive_text()
@@ -85,7 +62,6 @@ async def receive_loop(websocket, subscriber):
 
 
 async def send_loop(websocket, subscriber):
-    """Забирать сообщения из очереди подписчика и отправлять клиенту."""
     try:
         while not subscriber.kicked:
             message = await subscriber.queue.get()

@@ -1,15 +1,3 @@
-"""Hub — комнаты, подписчики и рассылка сообщений.
-
-Это единственное место в программе, где хранится состояние чата.
-Транспорты (WebSocket и SSE) про комнаты ничего не знают: они вызывают
-hub.join, забирают сообщения из очереди подписчика и отправляют их
-клиенту своим способом.
-
-Блокировки здесь не нужны. Сервер работает в одном потоке, а в методах
-Hub нет ни одного await, поэтому каждый метод выполняется целиком и
-никто другой в это время словарь комнат не меняет.
-"""
-
 import asyncio
 import logging
 
@@ -21,12 +9,10 @@ log = logging.getLogger("chat.hub")
 
 
 class NickTaken(Exception):
-    """Ник в этой комнате уже занят."""
+    pass
 
 
 class Subscriber:
-    """Один подключённый клиент."""
-
     def __init__(self, room, nick):
         self.room = room
         self.nick = nick
@@ -40,11 +26,6 @@ class Hub:
         self.last_id = 0
 
     def join(self, room, nick):
-        """Добавить клиента в комнату и вернуть его Subscriber.
-
-        Выбрасывает ValueError, если ник или комната некорректны,
-        и NickTaken, если такой ник в комнате уже есть.
-        """
         room = models.check_room(room)
         nick = models.check_nick(nick)
 
@@ -62,11 +43,6 @@ class Hub:
         return subscriber
 
     def leave(self, subscriber):
-        """Убрать клиента из комнаты и сообщить об этом остальным.
-
-        Повторный вызов безопасен: если клиента уже убрали
-        (например, как медленного), ничего не происходит.
-        """
         members = self.rooms.get(subscriber.room, {})
         if members.get(subscriber.nick) is not subscriber:
             return
@@ -78,11 +54,6 @@ class Hub:
         self.publish(subscriber.room, models.make_leave(subscriber.room, subscriber.nick))
 
     def publish(self, room, message):
-        """Положить сообщение в очереди всех подписчиков комнаты.
-
-        Всем кладётся один и тот же словарь, поэтому транспорты
-        не должны его изменять.
-        """
         if message["type"] == "message":
             self.last_id += 1
             message["id"] = self.last_id
@@ -106,15 +77,12 @@ class Hub:
             self.leave(subscriber)
 
     def online(self, room):
-        """Список ников в комнате по алфавиту."""
         return sorted(self.rooms.get(room, {}))
 
     def has(self, room, nick):
-        """Есть ли такой ник в комнате."""
         return nick in self.rooms.get(room, {})
 
     def stats(self):
-        """Числа для /api/stats: сколько подключений и насколько заняты очереди."""
         connections = 0
         queue_max = 0
         queue_total = 0

@@ -1,19 +1,3 @@
-"""Транспорт SSE (участник B).
-
-SSE (Server-Sent Events) — это обычный HTTP-ответ, который не заканчивается.
-Сервер держит его открытым и дописывает в него события по мере появления:
-
-    id: 123
-    data: {"type": "message", ...}
-    <пустая строка — конец события>
-
-Строка, начинающаяся с двоеточия (": ping"), — комментарий. Браузер её
-пропускает, а нужна она, чтобы соединение не закрыли по простою.
-
-В обратную сторону (клиент -> сервер) SSE не работает, поэтому сообщения
-отправляются отдельными запросами POST /sse/send.
-"""
-
 import asyncio
 import json
 import logging
@@ -33,12 +17,6 @@ router = APIRouter(prefix="/sse")
 
 
 class SendBody(BaseModel):
-    """Тело запроса POST /sse/send.
-
-    FastAPI сам разбирает JSON и проверяет поля по этому классу.
-    Если данные не подходят, клиент получает ответ 422.
-    """
-
     room: str
     nick: str
     text: str
@@ -49,7 +27,6 @@ KICKED_EVENT = "event: kicked\ndata: {}\n\n"
 
 
 def format_event(message):
-    """Превратить словарь-сообщение в текст одного события SSE."""
     data = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
     if message["type"] == "message":
         return f"id: {message['id']}\ndata: {data}\n\n"
@@ -57,10 +34,6 @@ def format_event(message):
 
 
 async def event_stream(request, subscriber):
-    """Асинхронный генератор: каждый yield — кусок ответа, который сразу
-    уходит клиенту. StreamingResponse крутит этот генератор, пока он
-    не закончится или пока клиент не отключится.
-    """
     try:
         while not subscriber.kicked:
             try:
@@ -101,12 +74,6 @@ async def sse_events(request: Request, room: str = "", nick: str = ""):
 
 @router.get("/check")
 async def sse_check(room: str = "", nick: str = ""):
-    """Объяснить, почему не удалось войти.
-
-    EventSource не сообщает HTTP-статус отказа, поэтому после ошибки клиент
-    спрашивает причину здесь. Проверки те же, что в hub.join, но в комнату
-    этот запрос никого не добавляет.
-    """
     try:
         room = models.check_room(room)
         nick = models.check_nick(nick)

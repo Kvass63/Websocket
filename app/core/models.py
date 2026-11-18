@@ -1,9 +1,3 @@
-"""Формат сообщений чата (общий для WebSocket и SSE).
-
-Сообщения — обычные словари. Функции ниже собирают их в одном месте,
-чтобы оба транспорта отправляли клиентам одинаковый JSON.
-"""
-
 import time
 
 MAX_NICK_LEN = 20
@@ -12,16 +6,10 @@ MAX_TEXT_LEN = 2000
 
 
 def now_ms():
-    """Текущее время сервера в миллисекундах."""
     return int(time.time() * 1000)
 
 
 def check_string(value, max_len):
-    """Проверить строку, пришедшую от клиента.
-
-    Возвращает строку без пробелов по краям. Если это не строка,
-    она пустая или слишком длинная, выбрасывает ValueError.
-    """
     if not isinstance(value, str):
         raise ValueError("ожидалась строка")
     value = value.strip()
@@ -45,11 +33,6 @@ def check_text(text):
 
 
 def make_message(room, nick, text, cts=None):
-    """Обычное сообщение чата.
-
-    Поле id здесь равно 0: настоящий номер проставит Hub в момент рассылки.
-    cts — время клиента, сервер возвращает его как есть (нужно бенчмарку).
-    """
     message = {
         "type": "message",
         "id": 0,
@@ -64,15 +47,12 @@ def make_message(room, nick, text, cts=None):
 
 
 def make_join(room, nick):
-    """Событие: пользователь вошёл в комнату."""
     return {"type": "join", "room": room, "nick": nick, "ts": now_ms()}
 
 
 def make_leave(room, nick):
-    """Событие: пользователь вышел из комнаты."""
     return {"type": "leave", "room": room, "nick": nick, "ts": now_ms()}
 
 
 def make_presence(room, online):
-    """Список тех, кто сейчас в комнате. Отправляется только вошедшему."""
     return {"type": "presence", "room": room, "online": online, "ts": now_ms()}

@@ -1,13 +1,3 @@
-"""Нагрузочный тест WebSocket (участник A).
-
-Здесь только клиент. Сценарий, замеры и запись результатов — в common.py,
-одни и те же для обоих транспортов.
-
-Запуск (сервер перезапущен перед каждым N, без --reload):
-    python bench/bench_ws.py --n 100               3 прогона, со сжатием
-    python bench/bench_ws.py --n 100 --no-deflate  то же без сжатия
-"""
-
 import asyncio
 import json
 from urllib.parse import urlencode
@@ -18,8 +8,6 @@ import common
 
 
 class WsClient:
-    """Один клиент чата по WebSocket."""
-
     def __init__(self, deflate=True):
         self.compression = "deflate" if deflate else None
         self.ws = None

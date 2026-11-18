@@ -1,8 +1,3 @@
-"""Точка входа: создаёт приложение FastAPI и собирает его части.
-
-Запуск: uvicorn app.main:app --reload
-"""
-
 import logging
 import mimetypes
 import os
@@ -28,13 +23,11 @@ app.include_router(sse.router)
 
 @app.get("/api/health")
 async def health():
-    """Проверка, что сервер жив."""
     return {"status": "ok"}
 
 
 @app.get("/api/stats")
 async def stats():
-    """Число подключений, размеры очередей и PID процесса (для бенчмарка и демо)."""
     data = hub.stats()
     data["pid"] = os.getpid()
     return data
