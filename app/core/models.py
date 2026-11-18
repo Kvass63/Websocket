@@ -6,7 +6,6 @@
 
 import time
 
-# Ограничения на длину строк. Проверяются в функциях check_*.
 MAX_NICK_LEN = 20
 MAX_ROOM_LEN = 30
 MAX_TEXT_LEN = 2000

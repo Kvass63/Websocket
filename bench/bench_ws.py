@@ -21,8 +21,6 @@ class WsClient:
     """Один клиент чата по WebSocket."""
 
     def __init__(self, deflate=True):
-        # Сжатие кадров (permessage-deflate) браузер включает сам, поэтому
-        # основной замер со сжатием. Без него — чтобы увидеть его цену.
         self.compression = "deflate" if deflate else None
         self.ws = None
         self.send_errors = 0
@@ -34,10 +32,7 @@ class WsClient:
         )
 
     async def send(self, text):
-        # cts ставим прямо перед отправкой, а не по расписанию.
         data = {"text": text, "cts": common.now_ms()}
-        # websockets сам JSON не кодирует. Кодируем так же компактно,
-        # как сервер (send_json в Starlette) и httpx у SSE.
         raw = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         try:
             await self.ws.send(raw)
@@ -45,9 +40,6 @@ class WsClient:
             self.send_errors += 1
 
     async def messages(self):
-        # Цикл по соединению отдаёт кадры, пока оно открыто. Когда сервер
-        # закрыл соединение с кодом не 1000 (например 4002), websockets
-        # бросает ConnectionClosed — для нас это просто конец сообщений.
         try:
             async for raw in self.ws:
                 yield json.loads(raw)

@@ -14,21 +14,14 @@ from fastapi.staticfiles import StaticFiles
 from app.core.hub import hub
 from app.transports import sse, ws
 
-# Чтобы сообщения из logging (например, об отключении медленного клиента)
-# были видны в консоли сервера.
 logging.basicConfig(level=logging.INFO)
 
-# На Windows тип файлов .js берётся из реестра и на некоторых машинах
-# равен text/plain. Браузер такие скрипты-модули не выполняет, поэтому
-# задаём тип явно.
 mimetypes.add_type("text/javascript", ".js")
 
-# Папка web/ лежит рядом с папкой app/.
 WEB_DIR = Path(__file__).parent.parent / "web"
 
 app = FastAPI(title="Чат: WebSocket и SSE")
 
-# Каждый транспорт описывает свои адреса в своём файле.
 app.include_router(ws.router)
 app.include_router(sse.router)
 
@@ -47,6 +40,4 @@ async def stats():
     return data
 
 
-# Статика подключается последней: она отвечает на все адреса, которые
-# не заняты выше. html=True значит, что по адресу "/" отдаётся index.html.
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

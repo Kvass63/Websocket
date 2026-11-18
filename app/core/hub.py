@@ -15,8 +15,6 @@ import logging
 
 from app.core import models
 
-# Сколько сообщений может ждать отправки одному клиенту.
-# Если очередь заполнилась, клиент считается медленным и отключается.
 QUEUE_SIZE = 100
 
 log = logging.getLogger("chat.hub")
@@ -32,18 +30,13 @@ class Subscriber:
     def __init__(self, room, nick):
         self.room = room
         self.nick = nick
-        # Сюда Hub кладёт сообщения, отсюда их забирает транспорт.
         self.queue = asyncio.Queue(maxsize=QUEUE_SIZE)
-        # True, если Hub отключил клиента как медленного.
-        # Транспорт проверяет этот флаг и закрывает соединение.
         self.kicked = False
 
 
 class Hub:
     def __init__(self):
-        # Название комнаты -> словарь {ник: Subscriber}.
         self.rooms = {}
-        # Номер последнего сообщения (поле id), общий на весь сервер.
         self.last_id = 0
 
     def join(self, room, nick):
@@ -58,8 +51,6 @@ class Hub:
         if self.has(room, nick):
             raise NickTaken(nick)
 
-        # Сначала сообщаем о входе тем, кто уже в комнате,
-        # и только потом добавляем нового: ему самому join не нужен.
         self.publish(room, models.make_join(room, nick))
 
         subscriber = Subscriber(room, nick)
@@ -67,7 +58,6 @@ class Hub:
             self.rooms[room] = {}
         self.rooms[room][nick] = subscriber
 
-        # Полный список онлайн получает только вошедший.
         subscriber.queue.put_nowait(models.make_presence(room, self.online(room)))
         return subscriber
 
@@ -83,7 +73,6 @@ class Hub:
 
         del members[subscriber.nick]
         if not members:
-            # Пустые комнаты не храним.
             del self.rooms[subscriber.room]
 
         self.publish(subscriber.room, models.make_leave(subscriber.room, subscriber.nick))
@@ -101,16 +90,12 @@ class Hub:
         slow = []
         for subscriber in self.rooms.get(room, {}).values():
             try:
-                # put_nowait не ждёт: если места нет, сразу бросает QueueFull.
                 subscriber.queue.put_nowait(message)
             except asyncio.QueueFull:
                 slow.append(subscriber)
 
-        # Медленных убираем после цикла: менять словарь во время обхода нельзя.
         for subscriber in slow:
             if subscriber.kicked:
-                # Уже выгнан во вложенной рассылке: leave другого медленного
-                # клиента разослал событие leave и при этом выгнал и этого.
                 continue
             log.warning(
                 "Очередь переполнена, отключаем клиента: комната=%s ник=%s",
@@ -150,6 +135,4 @@ class Hub:
         }
 
 
-# Один Hub на всё приложение. main.py и оба транспорта импортируют
-# именно эту переменную, поэтому клиенты WS и SSE видят друг друга.
 hub = Hub()

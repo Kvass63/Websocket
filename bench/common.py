@@ -64,27 +64,19 @@ from pathlib import Path
 import httpx
 import psutil
 
-# --- Параметры, одинаковые для обоих транспортов ---
 
-# 127.0.0.1, а не localhost: на Windows localhost сначала пробует IPv6
-# (::1), а uvicorn по умолчанию слушает только IPv4.
 HTTP_URL = "http://127.0.0.1:8000"
 WS_URL = "ws://127.0.0.1:8000"
 
 ROOM = "bench"
-M = 200                # сколько сообщений отправляет отправитель
-INTERVAL_MS = 20       # интервал между отправками
-# Сколько ждать недошедшие после последней отправки. С запасом: при
-# N = 500 сервер не успевает, очередь растёт, и последние сообщения в
-# пробном прогоне SSE шли до 4,7 с. С тайм-аутом 5 с опоздавшие считались
-# бы потерянными. На задержку тайм-аут не влияет: окно замера кончается
-# на последней доставке, а когда пришло всё, ждать перестаём сразу.
+M = 200
+INTERVAL_MS = 20
 WAIT_TIMEOUT_S = 30
-TEXT_LEN = 100         # длина текста сообщения, только латиница
-CONNECT_BATCH = 50     # сколько клиентов подключаем одновременно
-SAMPLE_INTERVAL_S = 0.5  # как часто замерять CPU и память
-READY_TIMEOUT_S = 60   # сколько ждать, пока сервер примет всех клиентов
-WORKERS = 4            # сколько дочерних процессов с получателями
+TEXT_LEN = 100
+CONNECT_BATCH = 50
+SAMPLE_INTERVAL_S = 0.5
+READY_TIMEOUT_S = 60
+WORKERS = 4
 
 DEFAULT_RUNS = 3
 
@@ -97,7 +89,6 @@ CSV_FIELDS = [
     "client_cpu_avg", "client_cpu_max",
 ]
 
-# Слова для текстов сообщений.
 WORDS = (
     "the a to and of in is it for on with at this that we you they can will "
     "meeting room slides today tomorrow please bring printed report team "
@@ -144,8 +135,6 @@ def now_ms():
     return time.perf_counter() * 1000
 
 
-# --- Помощники ---
-
 def latency_stats(latencies):
     """Среднее и p95 по всем задержкам вместе, в миллисекундах.
 
@@ -185,12 +174,10 @@ class Delivery:
     def __init__(self, expected):
         self.expected = expected
         self.latencies = []
-        self.last_time = None  # perf_counter последней доставки
-        # Событие «пришло всё ожидаемое»: тогда не ждём тайм-аут зря.
+        self.last_time = None
         self.all_received = asyncio.Event()
 
     def add(self, message):
-        # Считаем только сообщения бенчмарка; join, leave, presence пропускаем.
         if message.get("type") != "message" or "cts" not in message:
             return
         self.latencies.append(now_ms() - message["cts"])
@@ -227,8 +214,6 @@ async def connect_clients(make_client, first, count, delivery):
         await client.connect(ROOM, nick)
         readers.append(asyncio.create_task(read_messages(client, delivery)))
 
-    # Пачками: 500 подключений сразу сервер принял бы медленнее и с
-    # ошибками по тайм-ауту.
     for start in range(0, count, CONNECT_BATCH):
         batch = clients[start:start + CONNECT_BATCH]
         await asyncio.gather(*(
@@ -246,9 +231,6 @@ async def close_clients(clients, readers):
     await asyncio.gather(*(client.close() for client in clients))
     for reader in readers:
         reader.cancel()
-    # Ошибки задач чтения возвращаем, чтобы их напечатать: иначе упавший
-    # клиент выглядел бы просто как потери. Отмена (CancelledError) — не
-    # ошибка, это мы сами остановили задачу строкой выше.
     results = await asyncio.gather(*readers, return_exceptions=True)
     return [repr(result) for result in results if isinstance(result, Exception)]
 
@@ -304,8 +286,6 @@ def rounded(value, digits):
     return None if value is None else round(value, digits)
 
 
-# --- Дочерний процесс ---
-
 def send_to_parent(data):
     """Отправить главному процессу строку JSON через stdout."""
     sys.stdout.write(json.dumps(data) + "\n")
@@ -335,9 +315,6 @@ async def run_worker(make_client):
     count = command["count"]
     delivery = Delivery(expected=count * M)
     clients, readers = await connect_clients(make_client, command["first"], count, delivery)
-    # PID сообщаем сами: на Windows python.exe из venv — только запускалка,
-    # настоящий Python — её дочерний процесс, и PID, который видит главный
-    # процесс, не тот, что нужен psutil.
     send_to_parent({"pid": os.getpid()})
 
     await read_from_parent("sent")
@@ -354,11 +331,6 @@ async def run_worker(make_client):
     })
 
 
-# --- Главный процесс ---
-
-# Самая длинная строка, которую главный читает из stdout дочернего. По
-# умолчанию asyncio разрешает 64 КБ, а строка с задержками при N = 500 —
-# около 0,5 МБ (125 клиентов × 200 сообщений).
 STDOUT_LIMIT = 16 * 1024 * 1024
 
 
@@ -366,14 +338,12 @@ class Worker:
     """Дочерний процесс с получателями, как его видит главный процесс."""
 
     def __init__(self, first, count):
-        self.first = first  # номер ника первого клиента
-        self.count = count  # сколько клиентов
+        self.first = first
+        self.count = count
         self.proc = None
-        self.pid = None     # PID настоящего Python, его присылает сам процесс
+        self.pid = None
 
     async def start(self):
-        # Тот же скрипт с теми же аргументами плюс --worker. stderr не
-        # перехватываем: диагностика дочернего видна в той же консоли.
         self.proc = await asyncio.create_subprocess_exec(
             sys.executable, sys.argv[0], *sys.argv[1:], "--worker",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -421,35 +391,26 @@ async def run_scenario(transport, make_client, n, run):
     workers = [Worker(first, count) for first, count in split_receivers(n)]
     try:
         async with httpx.AsyncClient() as http:
-            # Клиенты прошлого прогона могли ещё не выйти из комнаты.
             await wait_stats(http, lambda s: s["connections"] == 0, "0 подключений")
 
-            # 1. Процессы запускаем все сразу: старт Python занимает время.
-            # Входят по очереди: сначала u0, потом клиенты каждого процесса.
             await asyncio.gather(*(worker.start() for worker in workers))
-            delivery = Delivery(expected=M)  # то, что получает сам u0
+            delivery = Delivery(expected=M)
             clients, readers = await connect_clients(make_client, 0, 1, delivery)
             sender = clients[0]
             for worker in workers:
                 await worker.send({"cmd": "connect", "first": worker.first, "count": worker.count})
                 worker.pid = (await worker.receive())["pid"]
 
-            # 2. Все вошли и разобрали свои join и presence.
             stats = await wait_stats(
                 http,
                 lambda s: s["connections"] == n and s["queue_total"] == 0,
                 f"{n} подключений и пустые очереди",
             )
             server = psutil.Process(stats["pid"])
-            # Память перед окном: от неё видно, сколько добавила сама рассылка.
             rss_start = server.memory_info().rss / 1024 / 1024
-            # Процессы клиентов: главный (psutil.Process() без PID — свой) и
-            # все дочерние.
             client_processes = [psutil.Process()]
             client_processes += [psutil.Process(worker.pid) for worker in workers]
 
-            # 3. Окно замера. Первый cpu_percent всегда 0.0, его отбрасываем:
-            # он только запоминает отправную точку.
             server.cpu_percent(None)
             for process in client_processes:
                 process.cpu_percent(None)
@@ -457,16 +418,12 @@ async def run_scenario(transport, make_client, n, run):
             sampler = asyncio.create_task(sample_usage(server, client_processes, samples))
             window_start = time.perf_counter()
 
-            # Отправляем по расписанию start + i × интервал, а не «sleep после
-            # каждой отправки»: так задержки отправки не накапливаются.
             for i in range(M):
                 delay = window_start + i * INTERVAL_MS / 1000 - time.perf_counter()
                 if delay > 0:
                     await asyncio.sleep(delay)
                 await sender.send(TEXTS[i])
 
-            # 4. Каждый процесс ждёт свою долю не дольше тайм-аута; главный
-            # тем временем ждёт сообщения для u0.
             for worker in workers:
                 await worker.send({"cmd": "sent"})
             await asyncio.gather(
@@ -474,12 +431,9 @@ async def run_scenario(transport, make_client, n, run):
             )
             sampler.cancel()
 
-            # Выкинутые как медленные: сразу после ожидания, пока клиенты
-            # ещё не закрыты (иначе все подключения уже будут 0).
             stats = await get_stats(http)
             kicked = n - stats["connections"]
 
-            # 5. Закрываем клиентов и собираем итоги со всех процессов.
             for worker in workers:
                 await worker.send({"cmd": "close"})
             read_errors = await close_clients(clients, readers)
@@ -500,16 +454,9 @@ async def run_scenario(transport, make_client, n, run):
     for error in read_errors:
         print(f"ошибка при чтении сообщений: {error}", file=sys.stderr)
 
-    # Окно — до последней доставки в любом процессе, без ожидания по
-    # тайм-ауту. Если не дошло ничего, окно пустое.
     received_times = [t for t in last_times if t is not None]
     window_end = max(received_times) if received_times else window_start
 
-    # Пропускная способность: сколько доставок в секунду сервер реально
-    # выдал за окно. Пока сервер успевает, это просто заданный темп
-    # N × 1000 / INTERVAL_MS (при N = 100 — 5000 в секунду). Когда не
-    # успевает, очередь растёт, окно растягивается, и число получается
-    # меньше заданного — это и есть предел сервера.
     window_s = window_end - window_start
     deliveries_per_s = len(latencies) / window_s if window_s > 0 else None
 
@@ -544,8 +491,6 @@ def make_parser():
                         help="число клиентов; перед каждым N перезапустите сервер")
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS,
                         help="сколько прогонов подряд")
-    # Служебный флаг: с ним run_scenario запускает дочерние процессы.
-    # Руками его не указывают, поэтому в --help он скрыт.
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     return parser
 

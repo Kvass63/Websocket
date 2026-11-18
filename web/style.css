@@ -1,4 +1,3 @@
-/* Цвета в одном месте, чтобы их было легко поменять. */
 :root {
   --bg: #f4f5f7;
   --panel: #ffffff;
@@ -12,7 +11,6 @@
   box-sizing: border-box;
 }
 
-/* Страница занимает всю высоту окна: шапка, середина, строка ввода. */
 body {
   margin: 0;
   height: 100vh;
@@ -78,7 +76,6 @@ select:disabled {
   cursor: default;
 }
 
-/* Индикатор статуса: цветная точка и подпись. */
 .status::before {
   content: "";
   display: inline-block;
@@ -102,11 +99,10 @@ select:disabled {
   background: #dc2626;
 }
 
-/* Середина: лента сообщений и список онлайн. */
 main {
   flex: 1;
   display: flex;
-  min-height: 0; /* без этого лента не будет прокручиваться */
+  min-height: 0;
 }
 
 .feed {
@@ -172,7 +168,6 @@ main {
   flex: 1;
 }
 
-/* На узком экране список онлайн уже. */
 @media (max-width: 600px) {
   .online {
     width: 120px;
